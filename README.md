@@ -9,3 +9,5 @@
 | [Windows11轻松设置](Windows11V1.zip) | V1 | Windows 11 | Windows 11系统优化设置工具，不到1MB |
 | [uTools](uTools-7.8.0.exe) | 7.8.0 | Windows x64 | 效率工具，下载自[官网](https://www.u-tools.cn/download/) |
 | [Apache Maven](apache-maven-3.9.9.zip) | 3.9.9 | 跨平台 (Java) | Java构建工具，[官网](https://maven.apache.org/) |
+| [TortoiseGit](TortoiseGit-2.15.0.0-64bit.msi) | 2.15.0.0 | Windows x64 | Git图形化客户端，[官网](https://tortoisegit.org/) |
+| [TortoiseGit中文包](TortoiseGit-LanguagePack-2.15.0.0-64bit-zh_CN.msi) | 2.15.0.0 | Windows x64 | TortoiseGit简体中文语言包 |
