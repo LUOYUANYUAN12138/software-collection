@@ -106,9 +106,17 @@ def scan_properties(resources_dir: str) -> dict:
     return all_placeholders
 
 
+def scan_deploy_keys(deploy_dir: str, priority_dirs: list[str]) -> set:
+    all_keys = set()
+    for dir_name in priority_dirs:
+        config_path = os.path.join(deploy_dir, dir_name, "service-config.txt")
+        config = parse_service_config(config_path)
+        all_keys.update(config.keys())
+    return all_keys
+
+
 def extract_config(resources_dir: str, deploy_dir: str, verbose: bool = False) -> dict:
     placeholders = scan_properties(resources_dir)
-    result = {}
     active_priority_dirs = []
     for d in PRIORITY_DIRS:
         full = os.path.join(deploy_dir, d, "service-config.txt")
@@ -116,8 +124,16 @@ def extract_config(resources_dir: str, deploy_dir: str, verbose: bool = False) -
             active_priority_dirs.append(d)
     if verbose:
         print(f"Active deploy dirs (in priority order): {active_priority_dirs}")
-    for key in sorted(placeholders.keys()):
-        default = placeholders[key]["default"]
+
+    all_keys = set(placeholders.keys())
+    deploy_keys = scan_deploy_keys(deploy_dir, active_priority_dirs)
+    deploy_only_keys = deploy_keys - all_keys
+    if verbose and deploy_only_keys:
+        print(f"Keys only in deploy (not in properties): {sorted(deploy_only_keys)}")
+
+    result = {}
+    for key in sorted(all_keys | deploy_only_keys):
+        default = placeholders.get(key, {}).get("default", "")
         result[key] = resolve_value(key, default, deploy_dir, active_priority_dirs, verbose)
     return result
 
@@ -163,6 +179,8 @@ icsl.timeout=${ICSL_TIMEOUT:5000}
 SERVICE_NAME=default-service-from-meta
 LOG_LEVEL=WARN
 REDIS_PORT=6380
+EXTRA_META_KEY=meta_only_value
+CLUSTER_NAME=default-cluster
 """,
     "deploy/huawei.meta/service-config.txt": """\
 # huawei.meta
@@ -186,6 +204,8 @@ MONITOR_INTERVAL=120
 DB_HOST=huawei-prod-db-host
 DB_PASS=huawei_prod_password
 REDIS_HOST=huawei-prod-redis
+EXTRA_PROD_KEY=prod_only_value
+CLUSTER_NAME=huawei-cluster
 """,
     "deploy/huawei.intl.prod/service-config.txt": """\
 # huawei.intl.prod
@@ -201,6 +221,8 @@ REDIS_HOST=dev-redis
 REDIS_PORT=6379
 DEBUG_MODE=false
 APP_PORT=8081
+EXTRA_DEV_KEY=dev_only_value
+CLUSTER_NAME=dev-cluster
 """,
 }
 
@@ -257,6 +279,15 @@ def run_tests(verbose: bool = False):
             "ICSL_TIMEOUT": "10000",
             # DEBUG_MODE: not in meta, not in prod, in dev (priority 7)
             "DEBUG_MODE": "false",
+            # EXTRA_META_KEY: only in default.meta (not in properties)
+            "EXTRA_META_KEY": "meta_only_value",
+            # EXTRA_PROD_KEY: only in huawei.prod (not in properties)
+            "EXTRA_PROD_KEY": "prod_only_value",
+            # EXTRA_DEV_KEY: only in dev (not in properties)
+            "EXTRA_DEV_KEY": "dev_only_value",
+            # CLUSTER_NAME: in default.meta, huawei.prod, and dev;
+            # default.meta wins (priority 1)
+            "CLUSTER_NAME": "default-cluster",
         }
 
         lines = []

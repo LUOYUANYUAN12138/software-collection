@@ -4,12 +4,12 @@
 
 ## 功能
 
-- 扫描 `resources` 目录下所有 `application*.properties` 文件
-- 提取 `${KEY}` 和 `${KEY:default}` 配置项
-- 按优先级从 `deploy` 目录下的 `service-config.txt` 取值
+- 扫描 `resources` 目录下所有 `application*.properties` 文件，提取 `${KEY}` 和 `${KEY:default}` 配置项
+- 同时扫描 `deploy` 目录下所有 `service-config.txt`，收集 properties 中未引用的配置项
+- 按优先级从 `deploy` 目录取值，两类 key 合并输出到一个 JSON
 - 支持 `--test` 模式，用模拟数据自动验证所有场景
 - 支持 `-v` 详细模式，显示每个 key 的取值来源
-- 输出一个合并的 JSON 配置文件
+- 输出一个合并的 JSON 配置文件（按字母排序）
 
 ## 取值优先级
 
@@ -97,3 +97,4 @@ REDIS_HOST=10.0.0.100
 3. 如果 deploy 目录下没有对应的子目录，会自动跳过
 4. 没有默认值且 deploy 里也没有的配置项，值为空字符串 `""`
 5. 配置项按字母排序输出
+6. deploy 目录中独有的配置项（properties 里没有 `${}` 引用的）也会包含在输出中
