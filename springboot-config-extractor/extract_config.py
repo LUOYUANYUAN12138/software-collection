@@ -48,8 +48,11 @@ def extract_properties_keys(resources_dir):
             content = f.read()
         matches = pattern.findall(content)
         for key, default_value in matches:
-            if key not in all_keys:
-                all_keys[key] = default_value if default_value else ""
+            # trim key 和 value
+            key = key.strip()
+            default_value = default_value.strip() if default_value else ""
+            if key and key not in all_keys:
+                all_keys[key] = default_value
     
     return all_keys
 
@@ -57,7 +60,7 @@ def extract_properties_keys(resources_dir):
 def parse_service_config(config_file):
     """
     解析 service-config.txt 文件，格式为 KEY=VALUE
-    返回：{KEY: VALUE}
+    返回：{KEY: VALUE}（key 统一转小写，便于不区分大小写匹配）
     """
     config = {}
     if not os.path.exists(config_file):
@@ -70,7 +73,12 @@ def parse_service_config(config_file):
                 continue
             if "=" in line:
                 key, value = line.split("=", 1)
-                config[key.strip()] = value.strip()
+                key = key.strip()
+                value = value.strip()
+                if key:
+                    # 存两份：原样 + 小写，方便匹配
+                    config[key] = value
+                    config[key.lower()] = value
     
     return config
 
@@ -108,10 +116,21 @@ def resolve_value(key, default_value, deploy_configs):
     """
     按优先级查找 key 的值。
     优先级：meta > prod > intl.prod > dev > 默认值
+    
+    匹配策略：
+    1. 先精确匹配
+    2. 再不区分大小写匹配
     """
+    # 先精确匹配
     for label, config in deploy_configs:
         if key in config:
             return config[key]
+    
+    # 再不区分大小写匹配
+    key_lower = key.lower()
+    for label, config in deploy_configs:
+        if key_lower in config:
+            return config[key_lower]
     
     return default_value
 
