@@ -1,0 +1,67 @@
+extract_config.py test results
+================================
+
+Active deploy dirs (in priority order): ['default.meta', 'huawei.meta', 'huawei.intl.meta', 'default.prod', 'huawei.prod', 'huawei.intl.prod', 'dev']
+
+Value resolution trace:
+  APP_PORT -> found in default.prod = 80
+  DB_HOST -> found in default.prod = prod-db-host
+  DB_NAME -> found in dev = dev_database
+  DB_PASS -> found in huawei.meta = huawei_meta_password
+  DB_USER -> found in dev = dev_user
+  DEBUG_MODE -> found in dev = false
+  FEATURE_ENABLED -> found in huawei.meta = true
+  I18N_LOCALE -> found in huawei.intl.meta = en_GB
+  ICSL_ENDPOINT -> not found anywhere, value is empty string
+  ICSL_TIMEOUT -> found in huawei.intl.prod = 10000
+  LOG_LEVEL -> found in default.meta = WARN
+  MONITOR_INTERVAL -> found in default.prod = 120
+  REDIS_HOST -> found in huawei.prod = huawei-prod-redis
+  REDIS_PORT -> found in default.meta = 6380
+  REGION -> found in huawei.intl.meta = eu-west
+  SERVICE_NAME -> found in default.meta = default-service-from-meta
+  SERVICE_VERSION -> using default = 1.0.0
+
+============================================================
+Test results: 17 passed, 0 failed
+============================================================
+  [PASS] APP_PORT: expected='80', got='80'
+  [PASS] DB_HOST: expected='prod-db-host', got='prod-db-host'
+  [PASS] DB_NAME: expected='dev_database', got='dev_database'
+  [PASS] DB_PASS: expected='huawei_meta_password', got='huawei_meta_password'
+  [PASS] DB_USER: expected='dev_user', got='dev_user'
+  [PASS] DEBUG_MODE: expected='false', got='false'
+  [PASS] FEATURE_ENABLED: expected='true', got='true'
+  [PASS] I18N_LOCALE: expected='en_GB', got='en_GB'
+  [PASS] ICSL_ENDPOINT: expected='', got=''
+  [PASS] ICSL_TIMEOUT: expected='10000', got='10000'
+  [PASS] LOG_LEVEL: expected='WARN', got='WARN'
+  [PASS] MONITOR_INTERVAL: expected='120', got='120'
+  [PASS] REDIS_HOST: expected='huawei-prod-redis', got='huawei-prod-redis'
+  [PASS] REDIS_PORT: expected='6380', got='6380'
+  [PASS] REGION: expected='eu-west', got='eu-west'
+  [PASS] SERVICE_NAME: expected='default-service-from-meta', got='default-service-from-meta'
+  [PASS] SERVICE_VERSION: expected='1.0.0', got='1.0.0'
+
+All 17 tests PASSED!
+
+Output JSON:
+{
+  "APP_PORT": "80",
+  "DB_HOST": "prod-db-host",
+  "DB_NAME": "dev_database",
+  "DB_PASS": "huawei_meta_password",
+  "DB_USER": "dev_user",
+  "DEBUG_MODE": "false",
+  "FEATURE_ENABLED": "true",
+  "I18N_LOCALE": "en_GB",
+  "ICSL_ENDPOINT": "",
+  "ICSL_TIMEOUT": "10000",
+  "LOG_LEVEL": "WARN",
+  "MONITOR_INTERVAL": "120",
+  "REDIS_HOST": "huawei-prod-redis",
+  "REDIS_PORT": "6380",
+  "REGION": "eu-west",
+  "SERVICE_NAME": "default-service-from-meta",
+  "SERVICE_VERSION": "1.0.0"
+}
