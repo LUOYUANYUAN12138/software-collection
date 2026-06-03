@@ -13,7 +13,9 @@
 - [三、方案 A：HTTP 模式（无 TLS）](#三方案-ahttp-模式无-tls)
 - [四、方案 B：HTTPS 模式（TLS 加密）](#四方案-bhttps-模式tls-加密)
 - [五、验证集群](#五验证集群)
-- [六、排错手册（实战踩坑记录）](#六排错手册实战踩坑记录)
+- [六、重启与启动顺序](#六重启与启动顺序)
+- [七、为什么要删除 data 目录](#七为什么要删除-data-目录)
+- [八、排错手册（实战踩坑记录）](#八排错手册实战踩坑记录)
 - [附录A：配置字段速查表](#附录a配置字段速查表)
 - [附录B：yml 配置文件踩坑指南](#附录byml-配置文件踩坑指南)
 
@@ -362,7 +364,127 @@ ETCDCTL_API=3 etcdctl \
 
 ---
 
-## 六、排错手册（实战踩坑记录）
+## 六、重启与启动顺序
+
+### 正常重启（不停机维护、配置变更后重启）
+
+**没有严格的启动顺序要求。** etcd 集群使用 Raft 协议，只要最终多数节点（2/3）恢复在线，集群就能正常工作。
+
+但建议按以下顺序操作：
+
+1. **先停后启，间隔 30 秒以上**
+2. 一次只停一台，等该节点恢复后再停下一台
+3. 每台重启后检查集群健康：
+   ```bash
+   # HTTP
+   ETCDCTL_API=3 etcdctl --endpoints=http://192.168.0.168:2379,http://192.168.0.145:2379,http://192.168.0.79:2379 endpoint health
+
+   # HTTPS
+   ETCDCTL_API=3 etcdctl \
+     --endpoints=https://192.168.0.168:2379,https://192.168.0.145:2379,https://192.168.0.79:2379 \
+     --cacert=/opt/etcd/ssl/chain.pem --cert=/opt/etcd/ssl/server.pem --key=/opt/etcd/ssl/server.key \
+     endpoint health
+   ```
+
+### 单节点重启步骤
+
+```bash
+# 在要重启的节点上
+systemctl restart etcd
+
+# 等待 10 秒
+sleep 10
+
+# 检查状态
+systemctl status etcd
+
+# 检查集群健康（在任意节点执行）
+ETCDCTL_API=3 etcdctl --endpoints=http://192.168.0.168:2379,http://192.168.0.145:2379,http://192.168.0.79:2379 endpoint health
+```
+
+### 三节点全部重启（如系统维护）
+
+1. **依次停机**：先停 node1，确认停了；再停 node2；最后停 node3
+2. **依次启动**：先启 node1，等 10 秒确认启动成功；再启 node2，等 10 秒；最后启 node3
+
+```bash
+# node1 上
+systemctl start etcd
+sleep 10
+systemctl status etcd
+
+# 确认 node1 正常后，在 node2 上
+systemctl start etcd
+sleep 10
+systemctl status etcd
+
+# 确认 node2 正常后，在 node3 上
+systemctl start etcd
+sleep 10
+systemctl status etcd
+```
+
+### 关键规则
+
+| 场景 | 规则 |
+|------|------|
+| 正常重启（配置不变） | 不需要清 data-dir，直接 `systemctl restart etcd` |
+| 修改配置后重启 | 修改 yml/service 文件 → `systemctl daemon-reload` → `systemctl restart etcd` |
+| 从 HTTP 切换到 HTTPS | **必须清 data-dir**，三台都清，三台同时启 |
+| 修改 initial-cluster（加减节点） | **必须清 data-dir** 或使用 member add/remove |
+| 删除 data-dir 后启动 | 配置中必须是 `initial-cluster-state: new` |
+| 整个集群宕机恢复 | 不需要清 data-dir，依次启动即可，etcd 会从 WAL 日志恢复 |
+
+---
+
+## 七、为什么要删除 data 目录
+
+### 什么情况需要删除？
+
+| 场景 | 需要删除吗 | 说明 |
+|------|-----------|------|
+| 首次部署 | **是** | data-dir 必须为空，`initial-cluster-state: new` 才能成功 |
+| 从 HTTP 切换到 HTTPS | **是** | 通信方式变了，旧数据不兼容，必须重建集群 |
+| 从 HTTPS 切换到 HTTP | **是** | 同上 |
+| 修改了 initial-cluster 成员 | **是** | 集群成员变化，旧数据不一致 |
+| `has already been bootstrapped` 报错 | **是** | data-dir 有残留数据，和 `new` 状态冲突 |
+| 正常重启（配置不变） | **否** | 直接 `systemctl restart etcd` |
+| 修改 yml 中非集群相关配置 | **否** | 如改日志级别、改 data-dir 路径等，不需要清数据 |
+| 整个集群宕机恢复 | **否** | etcd 从 WAL 日志恢复数据，不要删 |
+| 单节点宕机恢复 | **否** | 该节点重启后会从 leader 同步数据 |
+
+### 为什么 `initial-cluster-state: new` 要求空 data-dir？
+
+etcd 在首次启动（`new`）时会：
+1. 检查 data-dir 是否为空
+2. 如果为空，初始化一个新的 Raft 集群
+3. 如果不为空，说明该节点已经加入过某个集群，拒绝用 `new` 模式启动（防止误操作覆盖数据）
+
+这就是为什么删除 data-dir 是安全的——它只是让 etcd 回到"首次启动"状态。
+
+### 删除 data-dir 的正确步骤
+
+```bash
+systemctl stop etcd           # 必须先停
+rm -rf /opt/etcd/data         # 删除数据
+mkdir -p /opt/etcd/data       # 重建目录
+chmod 700 /opt/etcd/data      # 设置权限（etcd 要求 700）
+systemctl start etcd           # 启动
+```
+
+> **警告**：删除 data-dir 会丢失所有 etcd 数据（包括 Nacos 注册的服务信息等）。如果有重要数据，请先用 etcdctl snapshot save 备份：
+> ```bash
+> ETCDCTL_API=3 etcdctl --endpoints=http://192.168.0.168:2379 snapshot save /tmp/etcd-backup.db
+> ```
+
+### 不想删 data-dir 时的替代方案
+
+1. 如果集群还活着，用 member remove + `initial-cluster-state: existing` 加入
+2. 如果是单节点数据损坏，从其他节点同步恢复（需多数节点存活）
+
+---
+
+## 八、排错手册（实战踩坑记录）
 
 ### 问题 1：yml 配置文件格式错误导致静默退出
 
