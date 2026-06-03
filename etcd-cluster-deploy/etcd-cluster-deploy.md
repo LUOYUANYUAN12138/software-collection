@@ -15,7 +15,8 @@
 - [五、验证集群](#五验证集群)
 - [六、跳板机批量部署脚本](#六跳板机批量部署脚本)
 - [七、排错手册](#七排错手册)
-- [附录：从 HTTP 切换到 HTTPS](#附录从-http-切换到-https)
+- [附录A：从 HTTP 切换到 HTTPS](#附录a从-http-切换到-https)
+- [附录B：配置字段速查表](#附录b配置字段速查表)
 
 ---
 
@@ -25,7 +26,7 @@
 
 ```bash
 ls -la /opt/etcd/etcd
-ls -la /opt/etcd/etcdctl
+/opt/etcd/etcd --version
 ```
 
 如果不在 PATH 中：
@@ -33,10 +34,6 @@ ls -la /opt/etcd/etcdctl
 ```bash
 ln -sf /opt/etcd/etcd /usr/local/bin/etcd
 ln -sf /opt/etcd/etcdctl /usr/local/bin/etcdctl
-
-# 验证
-etcd --version
-ETCDCTL_API=3 etcdctl version
 ```
 
 ### 2. 确认端口未被占用
@@ -45,20 +42,32 @@ ETCDCTL_API=3 etcdctl version
 ss -tlnp | grep -E '2379|2380'
 ```
 
-如果有输出，说明端口被占用，需要先停掉旧进程：
+如果有输出，先杀掉旧进程：
 
 ```bash
 pkill etcd
 ```
 
-### 3. etcd 版本与 systemd Type 的兼容性
-
-- etcd >= 3.5：支持 `Type=notify`（systemd 能感知 etcd 就绪）
-- etcd < 3.5 或不确定：用 `Type=simple` + `TimeoutStartSec=120`
+### 3. 确认架构匹配
 
 ```bash
-etcd --version | head -1
+file /opt/etcd/etcd
+uname -m
 ```
+
+如果 `file` 显示 `ARM aarch64` 但 `uname -m` 显示 `x86_64`（或反过来），说明二进制架构不对，需要重新下载。
+
+### 4. 关于启动方式
+
+**本仓库提供两种方式启动 etcd：**
+
+| 方式 | 文件 | 优缺点 |
+|------|------|--------|
+| **命令行参数（推荐）** | `etcd.service.http.nodeX` / `etcd.service.https.nodeX` | 稳定可靠，不会因 yml 格式问题导致静默退出 |
+| **配置文件** | `etcd.yml` | 集中管理，但部分环境下 yml 格式问题会导致 etcd 无输出退出 |
+
+> **已知问题**：部分环境下 etcd 读取 yml 配置文件会静默退出不报错，原因可能是 yml 引号格式、缩进、编码等问题。
+> 如果遇到 `systemctl start etcd` 报 `exit-code` 但前台运行也没输出的情况，**请使用命令行参数方式（推荐）**。
 
 ---
 
@@ -66,7 +75,7 @@ etcd --version | head -1
 
 华为云安全组已配置的情况下，确认三台之间 2379、2380 端口互通。
 
-**在每台机器上执行**（用 bash 内置 TCP 测试，不需要 telnet）：
+**在每台机器上执行**（无需 telnet，用 bash 内置）：
 
 ```bash
 # node1（192.168.0.168）上测试到 node2、node3
@@ -96,83 +105,23 @@ bash -c 'echo > /dev/tcp/192.168.0.145/2380 && echo "145:2380 OK" || echo "145:2
 
 > 内网环境推荐先用此方案跑通集群，确认 etcd 本身没问题，再加 TLS。
 
-### 1. 创建 systemd 服务文件
+### 1. 部署方式
 
-三台机器**都执行**：
+**推荐使用命令行参数方式**（直接用本仓库的 service 文件）：
 
 ```bash
-cat > /etc/systemd/system/etcd.service << 'EOF'
-[Unit]
-Description=etcd service
-After=network.target
+# 在对应节点上，将 service 文件复制到 systemd 目录
+# node1（192.168.0.168）：
+cp etcd.service.http.node1 /etc/systemd/system/etcd.service
 
-[Service]
-Type=notify
-ExecStart=/opt/etcd/etcd --config-file /opt/etcd/etcd.yml
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
+# node2（192.168.0.145）：
+cp etcd.service.http.node2 /etc/systemd/system/etcd.service
 
-[Install]
-WantedBy=multi-user.target
-EOF
+# node3（192.168.0.79）：
+cp etcd.service.http.node3 /etc/systemd/system/etcd.service
 ```
 
-> **如果你的 etcd 版本 < 3.5**，把 `Type=notify` 改为 `Type=simple`，并在 `[Service]` 段加一行 `TimeoutStartSec=120`。
-
-### 2. 配置文件
-
-#### node1（192.168.0.168） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node1'
-data-dir: /opt/etcd/data
-listen-client-urls: 'http://192.168.0.168:2379,http://127.0.0.1:2379'
-listen-peer-urls: 'http://192.168.0.168:2380'
-advertise-client-urls: 'http://192.168.0.168:2379'
-initial-advertise-peer-urls: 'http://192.168.0.168:2380'
-initial-cluster: 'node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-```
-
-#### node2（192.168.0.145） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node2'
-data-dir: /opt/etcd/data
-listen-client-urls: 'http://192.168.0.145:2379,http://127.0.0.1:2379'
-listen-peer-urls: 'http://192.168.0.145:2380'
-advertise-client-urls: 'http://192.168.0.145:2379'
-initial-advertise-peer-urls: 'http://192.168.0.145:2380'
-initial-cluster: 'node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-```
-
-#### node3（192.168.0.79） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node3'
-data-dir: /opt/etcd/data
-listen-client-urls: 'http://192.168.0.79:2379,http://127.0.0.1:2379'
-listen-peer-urls: 'http://192.168.0.79:2380'
-advertise-client-urls: 'http://192.168.0.79:2379'
-initial-advertise-peer-urls: 'http://192.168.0.79:2380'
-initial-cluster: 'node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-```
-
-### 3. 关于 `name` 字段
-
-**`name` 是必填字段**，不能省略。原因：
-
-- 集群模式下 etcd 使用 `name` 标识节点身份
-- `name` 必须和 `initial-cluster` 中的 key 完全匹配（node1/node2/node3）
-- 如果不写 `name`，etcd 会使用系统的 `hostname`，而 hostname 通常不会是 node1/node2/node3，导致集群初始化失败
-
-### 4. 启动集群
+### 2. 启动集群
 
 三台机器都执行（尽量同时启动，间隔不要超过 1 分钟）：
 
@@ -180,6 +129,7 @@ initial-cluster-token: 'etcd-cluster'
 # 清理旧数据（首次启动或重新初始化时必须执行）
 rm -rf /opt/etcd/data
 mkdir -p /opt/etcd/data
+chmod 700 /opt/etcd/data
 
 # 加载服务并启动
 systemctl daemon-reload
@@ -190,15 +140,56 @@ systemctl start etcd
 systemctl status etcd
 ```
 
+### 3. 关于 `name` 字段
+
+**`name` 是必填字段**，不能省略。原因：
+- 集群模式下 etcd 使用 `name` 标识节点身份
+- `name` 必须和 `initial-cluster` 中的 key 完全匹配（node1/node2/node3）
+- 如果不写 `name`，etcd 会使用系统的 `hostname`，而 hostname 通常不会是 node1/node2/node3，导致集群初始化失败
+
+### 4. service 文件内容说明
+
+以 node1 为例，`etcd.service.http.node1` 内容：
+
+```ini
+[Unit]
+Description=etcd service
+After=network.target
+
+[Service]
+Type=simple
+TimeoutStartSec=120
+ExecStart=/opt/etcd/etcd \
+  --name node1 \
+  --data-dir /opt/etcd/data \
+  --listen-client-urls http://192.168.0.168:2379,http://127.0.0.1:2379 \
+  --listen-peer-urls http://192.168.0.168:2380 \
+  --advertise-client-urls http://192.168.0.168:2379 \
+  --initial-advertise-peer-urls http://192.168.0.168:2380 \
+  --initial-cluster node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380 \
+  --initial-cluster-state new \
+  --initial-cluster-token etcd-cluster
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **为什么用 `Type=simple` 而不是 `Type=notify`？**
+> `Type=notify` 要求 etcd >= 3.5 且编译时包含 systemd notify 支持。如果版本不兼容会导致启动失败。
+> `Type=simple` 兼容所有版本。配合 `TimeoutStartSec=120` 给 etcd 足够的启动时间。
+
 ---
 
 ## 四、方案 B：HTTPS 模式（TLS 加密）
 
-> 前提：先用方案 A 跑通集群，确认 etcd 本身没问题。
+> **前提**：先用方案 A 跑通集群，确认 etcd 本身没问题，再切换到 HTTPS。
 
 ### 0. 确认证书文件
 
-你的证书放在 `/opt/etcd/ssl/` 下，文件为：
+你的证书在 `/opt/etcd/ssl/` 下：
 
 | 文件 | 用途 |
 |------|------|
@@ -206,7 +197,7 @@ systemctl status etcd
 | `server.pem` | 服务端证书 |
 | `server.key` | 服务端私钥 |
 
-**重要：这些文件不需要做 base64 转换，不需要做 PKCS8 转换。** 你之前看到的教程是给 Java/Nacos 用的，etcd 直接使用原始 PEM 格式。
+**重要：这些文件不需要做 base64 转换，不需要做 PKCS8 转换。** 之前教程里的 base64/PKCS8 转换是给 Java/Nacos 用的，etcd 直接使用原始 PEM 格式。
 
 ### 1. 检查证书 SAN（关键！）
 
@@ -216,18 +207,15 @@ systemctl status etcd
 openssl x509 -in /opt/etcd/ssl/server.pem -noout -text | grep -A1 "Subject Alternative Name"
 ```
 
-你会看到类似这样的输出：
-
+输出示例：
 ```
 Subject Alternative Name:
     DNS:etcd-node, IP Address:192.168.0.168, IP Address:192.168.0.145, IP Address:192.168.0.79
 ```
 
-**情况判断：**
-
 | SAN 内容 | 处理方式 |
 |-----------|----------|
-| 包含所有 3 个 IP | 三台可以共用同一套证书，直接用 |
+| 包含所有 3 个 IP | 三台可以共用同一套证书 |
 | 只包含 1 个 IP | 每台需要各自签名的证书（确认三台的 server.pem 内容不同） |
 | 不包含任何内网 IP | 证书不能用，需要重新签发 |
 
@@ -240,139 +228,83 @@ md5sum /opt/etcd/ssl/server.key
 md5sum /opt/etcd/ssl/chain.pem
 ```
 
-- 如果三台 md5 相同 → 共用证书，SAN 必须包含所有 IP
-- 如果三台 md5 不同 → 各自签名，SAN 只需包含本机 IP
+- 三台 md5 相同 → 共用证书，SAN 必须包含所有 IP
+- 三台 md5 不同 → 各自签名，SAN 只需包含本机 IP
 
-### 2. 创建 systemd 服务文件
+### 2. 部署方式
 
-与方案 A 相同：
+使用命令行参数方式（推荐）：
 
 ```bash
-cat > /etc/systemd/system/etcd.service << 'EOF'
+# node1（192.168.0.168）：
+cp etcd.service.https.node1 /etc/systemd/system/etcd.service
+
+# node2（192.168.0.145）：
+cp etcd.service.https.node2 /etc/systemd/system/etcd.service
+
+# node3（192.168.0.79）：
+cp etcd.service.https.node3 /etc/systemd/system/etcd.service
+```
+
+### 3. service 文件内容说明
+
+以 node1 为例，`etcd.service.https.node1` 内容：
+
+```ini
 [Unit]
 Description=etcd service
 After=network.target
 
 [Service]
-Type=notify
-ExecStart=/opt/etcd/etcd --config-file /opt/etcd/etcd.yml
+Type=simple
+TimeoutStartSec=120
+ExecStart=/opt/etcd/etcd \
+  --name node1 \
+  --data-dir /opt/etcd/data \
+  --listen-client-urls https://192.168.0.168:2379,https://127.0.0.1:2380 \
+  --listen-peer-urls https://192.168.0.168:2380 \
+  --advertise-client-urls https://192.168.0.168:2379 \
+  --initial-advertise-peer-urls https://192.168.0.168:2380 \
+  --initial-cluster node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380 \
+  --initial-cluster-state new \
+  --initial-cluster-token etcd-cluster \
+  --cert-file /opt/etcd/ssl/server.pem \
+  --key-file /opt/etcd/ssl/server.key \
+  --peer-cert-file /opt/etcd/ssl/server.pem \
+  --peer-key-file /opt/etcd/ssl/server.key \
+  --trusted-ca-file /opt/etcd/ssl/chain.pem \
+  --peer-trusted-ca-file /opt/etcd/ssl/chain.pem \
+  --client-cert-auth \
+  --peer-client-cert-auth
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-EOF
 ```
 
-### 3. 配置文件
-
-#### node1（192.168.0.168） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node1'
-data-dir: /opt/etcd/data
-listen-client-urls: 'https://192.168.0.168:2379,https://127.0.0.1:2379'
-listen-peer-urls: 'https://192.168.0.168:2380'
-advertise-client-urls: 'https://192.168.0.168:2379'
-initial-advertise-peer-urls: 'https://192.168.0.168:2380'
-initial-cluster: 'node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-peer-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-```
-
-#### node2（192.168.0.145） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node2'
-data-dir: /opt/etcd/data
-listen-client-urls: 'https://192.168.0.145:2379,https://127.0.0.1:2379'
-listen-peer-urls: 'https://192.168.0.145:2380'
-advertise-client-urls: 'https://192.168.0.145:2379'
-initial-advertise-peer-urls: 'https://192.168.0.145:2380'
-initial-cluster: 'node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-peer-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-```
-
-#### node3（192.168.0.79） `/opt/etcd/etcd.yml`
-
-```yaml
-name: 'node3'
-data-dir: /opt/etcd/data
-listen-client-urls: 'https://192.168.0.79:2379,https://127.0.0.1:2379'
-listen-peer-urls: 'https://192.168.0.79:2380'
-advertise-client-urls: 'https://192.168.0.79:2379'
-initial-advertise-peer-urls: 'https://192.168.0.79:2380'
-initial-cluster: 'node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-peer-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-```
-
-### 4. 关于 `client-cert-auth` 的取舍
+### 4. 关于 `--client-cert-auth` 的取舍
 
 | 设置 | 含义 | 适用场景 |
 |------|------|----------|
-| `client-cert-auth: true` | 客户端必须提供证书才能连接 etcd | etcd 集群内部通信（peer）建议开 |
-| `client-cert-auth: false` | 客户端不需要证书，只服务端提供证书 | 如果 Nacos 等应用不带客户端证书连 etcd，需要关掉 |
+| `--client-cert-auth` 开启 | 客户端必须提供证书才能连接 | etcd 集群内部通信（peer）建议开 |
+| 不加 `--client-cert-auth` | 客户端不需要证书 | 如果 Nacos 等应用不带客户端证书连 etcd |
 
-**如果后续 Nacos 连接 etcd 报证书错误**，把 `client-transport-security` 段的 `client-cert-auth: true` 改为 `client-cert-auth: false`，然后重启 etcd。
+**如果后续 Nacos 连接 etcd 报证书错误**，编辑 service 文件删除 `--client-cert-auth` 这一行，保留 `--peer-client-cert-auth`，然后：
 
-`peer-transport-security` 段的 `client-cert-auth: true` 建议保持不变——这是节点间通信，三台都有证书。
-
-### 5. 如果三台证书不同（各台独立签发）
-
-把配置文件中的证书路径改为各台自己的证书文件名即可。比如某台的证书叫 `server-node1.pem`，就改：
-
-```yaml
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server-node1.pem
-  key-file: /opt/etcd/ssl/server-node1.key
-  ...
+```bash
+systemctl daemon-reload
+systemctl restart etcd
 ```
 
-### 6. 启动集群
+### 5. 启动集群
 
 ```bash
 # 清理旧数据（如果之前用 HTTP 模式启动过，必须清理）
 rm -rf /opt/etcd/data
 mkdir -p /opt/etcd/data
+chmod 700 /opt/etcd/data
 
 # 确认证书文件可读
 ls -la /opt/etcd/ssl/
@@ -486,41 +418,38 @@ for i in "${!NODES[@]}"; do
   echo "配置 $NAME ($IP)"
   echo "=========================================="
 
-  # 创建 systemd 服务
-  ssh ${USER}@${IP} 'cat > /etc/systemd/system/etcd.service << '"'"'EOF'"'"'
+  # 创建 systemd 服务（命令行参数方式）
+  ssh ${USER}@${IP} "cat > /etc/systemd/system/etcd.service << 'SERVICEEOF'
 [Unit]
 Description=etcd service
 After=network.target
 
 [Service]
-Type=notify
-ExecStart=/opt/etcd/etcd --config-file /opt/etcd/etcd.yml
+Type=simple
+TimeoutStartSec=120
+ExecStart=/opt/etcd/etcd \\
+  --name ${NAME} \\
+  --data-dir /opt/etcd/data \\
+  --listen-client-urls http://${IP}:2379,http://127.0.0.1:2379 \\
+  --listen-peer-urls http://${IP}:2380 \\
+  --advertise-client-urls http://${IP}:2379 \\
+  --initial-advertise-peer-urls http://${IP}:2380 \\
+  --initial-cluster node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380 \\
+  --initial-cluster-state new \\
+  --initial-cluster-token etcd-cluster
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-EOF'
-
-  # 写入配置文件
-  ssh ${USER}@${IP} "cat > /opt/etcd/etcd.yml << EOF
-name: '${NAME}'
-data-dir: /opt/etcd/data
-listen-client-urls: 'http://${IP}:2379,http://127.0.0.1:2379'
-listen-peer-urls: 'http://${IP}:2380'
-advertise-client-urls: 'http://${IP}:2379'
-initial-advertise-peer-urls: 'http://${IP}:2380'
-initial-cluster: 'node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-EOF"
+SERVICEEOF"
 
   # 链接二进制
   ssh ${USER}@${IP} 'ln -sf /opt/etcd/etcd /usr/local/bin/etcd; ln -sf /opt/etcd/etcdctl /usr/local/bin/etcdctl'
 
   # 清理旧数据
-  ssh ${USER}@${IP} 'rm -rf /opt/etcd/data; mkdir -p /opt/etcd/data'
+  ssh ${USER}@${IP} 'rm -rf /opt/etcd/data; mkdir -p /opt/etcd/data; chmod 700 /opt/etcd/data'
 
   echo "$NAME ($IP) 配置完成"
   echo ""
@@ -560,57 +489,50 @@ for i in "${!NODES[@]}"; do
   echo "配置 $NAME ($IP)"
   echo "=========================================="
 
-  # 创建 systemd 服务
-  ssh ${USER}@${IP} 'cat > /etc/systemd/system/etcd.service << '"'"'EOF'"'"'
+  # 检查证书文件
+  echo "证书文件检查："
+  ssh ${USER}@${IP} 'ls -la /opt/etcd/ssl/'
+
+  # 创建 systemd 服务（命令行参数方式 + TLS）
+  ssh ${USER}@${IP} "cat > /etc/systemd/system/etcd.service << 'SERVICEEOF'
 [Unit]
 Description=etcd service
 After=network.target
 
 [Service]
-Type=notify
-ExecStart=/opt/etcd/etcd --config-file /opt/etcd/etcd.yml
+Type=simple
+TimeoutStartSec=120
+ExecStart=/opt/etcd/etcd \\
+  --name ${NAME} \\
+  --data-dir /opt/etcd/data \\
+  --listen-client-urls https://${IP}:2379,https://127.0.0.1:2379 \\
+  --listen-peer-urls https://${IP}:2380 \\
+  --advertise-client-urls https://${IP}:2379 \\
+  --initial-advertise-peer-urls https://${IP}:2380 \\
+  --initial-cluster node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380 \\
+  --initial-cluster-state new \\
+  --initial-cluster-token etcd-cluster \\
+  --cert-file /opt/etcd/ssl/server.pem \\
+  --key-file /opt/etcd/ssl/server.key \\
+  --peer-cert-file /opt/etcd/ssl/server.pem \\
+  --peer-key-file /opt/etcd/ssl/server.key \\
+  --trusted-ca-file /opt/etcd/ssl/chain.pem \\
+  --peer-trusted-ca-file /opt/etcd/ssl/chain.pem \\
+  --client-cert-auth \\
+  --peer-client-cert-auth
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-EOF'
-
-  # 写入配置文件
-  ssh ${USER}@${IP} "cat > /opt/etcd/etcd.yml << EOF
-name: '${NAME}'
-data-dir: /opt/etcd/data
-listen-client-urls: 'https://${IP}:2379,https://127.0.0.1:2379'
-listen-peer-urls: 'https://${IP}:2380'
-advertise-client-urls: 'https://${IP}:2379'
-initial-advertise-peer-urls: 'https://${IP}:2380'
-initial-cluster: 'node1=https://192.168.0.168:2380,node2=https://192.168.0.145:2380,node3=https://192.168.0.79:2380'
-initial-cluster-state: new
-initial-cluster-token: 'etcd-cluster'
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-peer-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: true
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-EOF"
+SERVICEEOF"
 
   # 链接二进制
   ssh ${USER}@${IP} 'ln -sf /opt/etcd/etcd /usr/local/bin/etcd; ln -sf /opt/etcd/etcdctl /usr/local/bin/etcdctl'
 
-  # 确认证书文件存在
-  echo "证书文件检查："
-  ssh ${USER}@${IP} 'ls -la /opt/etcd/ssl/'
-
   # 清理旧数据
-  ssh ${USER}@${IP} 'rm -rf /opt/etcd/data; mkdir -p /opt/etcd/data'
+  ssh ${USER}@${IP} 'rm -rf /opt/etcd/data; mkdir -p /opt/etcd/data; chmod 700 /opt/etcd/data'
 
   echo "$NAME ($IP) 配置完成"
   echo ""
@@ -646,40 +568,54 @@ echo "  endpoint health"
 **排查步骤**（按顺序执行）：
 
 ```bash
-# 第一步：看退出码
+# 第一步：看退出码和状态
 systemctl status etcd
 
 # 第二步：看完整日志
 journalctl -u etcd -n 100 --no-pager
 
-# 第三步：如果上面都没有有效信息，前台跑看错误
+# 第三步：如果日志没有有用信息，前台运行看错误
 /opt/etcd/etcd --config-file /opt/etcd/etcd.yml
-# 错误会直接打印到终端
+# 如果这条也没输出就退出，说明是配置文件问题，改用命令行参数方式
+
+# 第四步：用命令行参数前台测试（以 node1 为例）
+/opt/etcd/etcd \
+  --name node1 \
+  --data-dir /opt/etcd/data \
+  --listen-client-urls http://192.168.0.168:2379,http://127.0.0.1:2379 \
+  --listen-peer-urls http://192.168.0.168:2380 \
+  --advertise-client-urls http://192.168.0.168:2379 \
+  --initial-advertise-peer-urls http://192.168.0.168:2380 \
+  --initial-cluster node1=http://192.168.0.168:2380,node2=http://192.168.0.145:2380,node3=http://192.168.0.79:2380 \
+  --initial-cluster-state new \
+  --initial-cluster-token etcd-cluster
 ```
 
 ### 问题 2：前台运行没有输出就退出
 
-这通常是配置文件格式问题。排查：
+**最常见原因**：etcd 读取配置文件时格式错误导致静默退出。
+
+**解决**：不用 yml 配置文件，改用本仓库提供的命令行参数 service 文件。
+
+**如果还是没输出**：
 
 ```bash
-# 检查 yml 格式（注意缩进和引号）
-cat -A /opt/etcd/etcd.yml | head -20
+# 确认二进制架构匹配
+file /opt/etcd/etcd
+uname -m
 
-# 验证 yml 是否合法（如果机器上有 python）
-python3 -c "import yaml; yaml.safe_load(open('/opt/etcd/etcd.yml'))" 2>&1
-
-# 最小化测试：用最少参数前台启动
-/opt/etcd/etcd --name test-node --data-dir /tmp/etcd-test --listen-client-urls http://127.0.0.1:2379
-# 如果这个能跑起来，说明是配置文件的问题
+# 用 strace 追踪
+strace -f -o /tmp/etcd-strace.log /opt/etcd/etcd --config-file /opt/etcd/etcd.yml
+tail -50 /tmp/etcd-strace.log
 ```
 
 ### 问题 3：日志含 certificate / TLS / x509 错误
 
 **常见信息**：`remote error: tls: bad certificate`、`certificate does not match`、`x509: certificate signed by unknown authority`
 
-**原因**：用了 https 但证书不匹配。
+**原因**：证书配置问题。
 
-**快速修复**：先把配置改为 HTTP 模式（方案 A），确认 etcd 本身没问题，再排查证书。
+**快速修复**：先用 HTTP 模式（方案 A），确认 etcd 本身没问题，再排查证书。
 
 **证书排查**：
 
@@ -701,9 +637,9 @@ openssl rsa -in /opt/etcd/ssl/server.key -noout -modulus | md5sum
 openssl verify -CAfile /opt/etcd/ssl/chain.pem /opt/etcd/ssl/server.pem
 ```
 
-### 问题 4：日志含 `conflict entry` / `already initialized`
+### 问题 4：日志含 conflict entry / already initialized
 
-**原因**：data-dir 中有旧数据。当 `initial-cluster-state: new` 时，data-dir 必须为空。
+**原因**：data-dir 中有旧数据。当 `--initial-cluster-state new` 时，data-dir 必须为空。
 
 **修复**：
 
@@ -711,6 +647,7 @@ openssl verify -CAfile /opt/etcd/ssl/chain.pem /opt/etcd/ssl/server.pem
 systemctl stop etcd
 rm -rf /opt/etcd/data
 mkdir -p /opt/etcd/data
+chmod 700 /opt/etcd/data
 systemctl start etcd
 ```
 
@@ -726,31 +663,16 @@ ss -tlnp | grep -E '2379|2380'
 
 # 杀掉旧进程
 pkill etcd
-
-# 如果端口还是被占，看看是哪个进程
-ss -tlnp | grep 2379
-# 根据进程 ID 处理
 ```
 
-### 问题 6：`Type=notify` 导致启动失败
+### 问题 6：data 目录权限警告
 
-**错误信息**：`Failed at step NOTIFY_SOCKET spawning` 或 systemd 直接超时。
+**警告信息**：`check file permission, directory /opt/etcd/data exist, but the permission is drwxr-xr-x. The recommended permission is -rwx`
 
-**原因**：etcd 版本 < 3.5，或者编译时没有包含 systemd notify 支持。
-
-**修复**：编辑 `/etc/systemd/system/etcd.service`：
-
-```ini
-[Service]
-Type=simple
-TimeoutStartSec=120
-# ... 其他行不变
-```
-
-然后：
+**修复**：
 
 ```bash
-systemctl daemon-reload
+chmod 700 /opt/etcd/data
 systemctl restart etcd
 ```
 
@@ -761,71 +683,37 @@ systemctl restart etcd
 **排查**：
 
 ```bash
-# 从 node1 测试到 node2 的 peer 端口
+# 从 node1 测试到 node2
 bash -c 'echo > /dev/tcp/192.168.0.145/2380 && echo "OK" || echo "FAIL"'
-
-# 如果 FAIL，检查安全组规则是否放行了 2380
 ```
 
-华为云 ECS 安全组需要放行以下端口：
-- 2379（客户端通信）
-- 2380（节点间通信）
+华为云 ECS 安全组需要放行：2379（客户端）、2380（节点间）。
 
-### 问题 8：集群已存在成员，想重新初始化
+### 问题 8：Nacos 连接 etcd 报证书错误
 
-**场景**：之前启动过，现在想完全重来。
+如果 Nacos 不带客户端证书连接 etcd，需要去掉 `--client-cert-auth`：
 
 ```bash
-# 在三台机器上分别执行
+# 编辑 service 文件，删除 --client-cert-auth 这一行
+# 保留 --peer-client-cert-auth
+vi /etc/systemd/system/etcd.service
+
+# 重新加载并重启
+systemctl daemon-reload
+systemctl restart etcd
+```
+
+### 问题 9：集群已存在成员，想重新初始化
+
+```bash
+# 三台机器都执行
 systemctl stop etcd
 rm -rf /opt/etcd/data
 mkdir -p /opt/etcd/data
+chmod 700 /opt/etcd/data
 
-# 确保配置文件中 initial-cluster-state: new
-grep "initial-cluster-state" /opt/etcd/etcd.yml
-
-# 重新启动
+# 确保配置文件中 --initial-cluster-state new
 systemctl start etcd
-```
-
-### 问题 9：etcdctl 连接 HTTPS 集群报错
-
-**常见报错**：`x509: certificate is valid for ... not for ...`
-
-这意味着证书的 SAN 不包含你连接时用的 IP。检查：
-
-```bash
-# 看证书的 SAN
-openssl x509 -in /opt/etcd/ssl/server.pem -noout -text | grep -A1 "Subject Alternative Name"
-
-# etcdctl 的 --endpoints 里的 IP 必须在 SAN 中
-```
-
-**常见报错**：`x509: certificate signed by unknown authority`
-
-`--cacert` 指定的 CA 证书不对，确认 chain.pem 文件内容。
-
-### 问题 10：Nacos 连接 etcd 报证书错误
-
-如果 Nacos 连接 etcd 不带客户端证书，需要关闭客户端证书认证：
-
-编辑每台机器的 `/opt/etcd/etcd.yml`：
-
-```yaml
-client-transport-security:
-  cert-file: /opt/etcd/ssl/server.pem
-  key-file: /opt/etcd/ssl/server.key
-  client-cert-auth: false    # 改为 false
-  trusted-ca-file: /opt/etcd/ssl/chain.pem
-  auto-tls: false
-```
-
-`peer-transport-security` 段的 `client-cert-auth: true` 保持不变。
-
-然后重启：
-
-```bash
-systemctl restart etcd
 ```
 
 ### 通用排查流程
@@ -843,59 +731,96 @@ systemctl start etcd 失败
 │   │   └─ connection refused → 网络不通（问题 7）
 │   │
 │   └─ 日志为空 → 前台运行看报错（问题 2）
+│       │
+│       ├─ 前台也没输出 → 配置文件问题，改用命令行参数
+│       └─ 前台有输出 → 根据输出排查
 │
-└─ Type=notify 失败 → 改 Type=simple（问题 6）
+└─ Type=notify 失败 → 改 Type=simple
 ```
 
 ---
 
-## 附录：从 HTTP 切换到 HTTPS
+## 附录A：从 HTTP 切换到 HTTPS
 
-如果你先用方案 A（HTTP）跑通了集群，现在想升级到 HTTPS：
-
-### 步骤
+如果先用方案 A（HTTP）跑通了集群，现在想升级到 HTTPS：
 
 ```bash
 # 1. 确认证书 SAN（在三台分别执行）
 openssl x509 -in /opt/etcd/ssl/server.pem -noout -text | grep -A1 "Subject Alternative Name"
 
 # 2. 停止三台 etcd
-# 在每台执行
-systemctl stop etcd
+systemctl stop etcd    # 三台都执行
 
-# 3. 清理数据（必须！因为从 HTTP 切到 HTTPS 相当于重建集群）
+# 3. 清理数据（必须！HTTP 切 HTTPS 相当于重建集群）
 rm -rf /opt/etcd/data
 mkdir -p /opt/etcd/data
+chmod 700 /opt/etcd/data
 
-# 4. 修改配置文件（用方案 B 的配置替换方案 A 的配置）
+# 4. 替换 service 文件（三台分别用对应的 https 版本）
+# node1：
+cp etcd.service.https.node1 /etc/systemd/system/etcd.service
+# node2：
+cp etcd.service.https.node2 /etc/systemd/system/etcd.service
+# node3：
+cp etcd.service.https.node3 /etc/systemd/system/etcd.service
 
-# 5. 启动三台 etcd
+# 5. 启动三台
+systemctl daemon-reload
 systemctl start etcd
 systemctl status etcd
 
-# 6. 用 HTTPS 方式验证集群（见第五节 HTTPS 验证部分）
+# 6. 验证（见第五节 HTTPS 验证部分）
 ```
 
-> **注意**：从 HTTP 切换到 HTTPS 必须清空 data-dir 重新初始化，不能原地升级。如果你有重要数据需要保留，先用 etcdctl 备份：
+> **注意**：HTTP 切换到 HTTPS 必须清空 data-dir 重新初始化。如果有重要数据需要保留，先备份：
 > ```bash
 > ETCDCTL_API=3 etcdctl --endpoints=http://192.168.0.168:2379 snapshot save /tmp/etcd-snapshot.db
 > ```
-> 切换到 HTTPS 后再恢复。
 
 ---
 
-## 配置字段速查表
+## 附录B：配置字段速查表
 
-| 字段 | 说明 | 是否必须 |
+### 命令行参数对照表
+
+| 参数 | 说明 | 是否必须 |
 |------|------|----------|
-| `name` | 节点名称，必须和 initial-cluster 中的 key 匹配 | **必须** |
-| `data-dir` | 数据存储目录 | **必须** |
-| `listen-client-urls` | 监听客户端请求的地址 | **必须** |
-| `listen-peer-urls` | 监听节点间通信的地址 | **必须** |
-| `advertise-client-urls` | 告知客户端的访问地址 | **必须** |
-| `initial-advertise-peer-urls` | 告知其他节点的通信地址 | **必须** |
-| `initial-cluster` | 集群成员列表 | 首次启动必须 |
-| `initial-cluster-state` | `new`（新建集群）或 `existing`（加入已有集群） | 首次启动必须 |
-| `initial-cluster-token` | 集群唯一标识，防止误加入其他集群 | 建议填写 |
-| `client-transport-security` | 客户端 TLS 配置 | HTTPS 时必须 |
-| `peer-transport-security` | 节点间 TLS 配置 | HTTPS 时必须 |
+| `--name` | 节点名称，必须和 initial-cluster 中的 key 匹配 | **必须** |
+| `--data-dir` | 数据存储目录 | **必须** |
+| `--listen-client-urls` | 监听客户端请求的地址 | **必须** |
+| `--listen-peer-urls` | 监听节点间通信的地址 | **必须** |
+| `--advertise-client-urls` | 告知客户端的访问地址 | **必须** |
+| `--initial-advertise-peer-urls` | 告知其他节点的通信地址 | **必须** |
+| `--initial-cluster` | 集群成员列表 | 首次启动必须 |
+| `--initial-cluster-state` | `new`（新建集群）或 `existing`（加入已有集群） | 首次启动必须 |
+| `--initial-cluster-token` | 集群唯一标识 | 建议填写 |
+| `--cert-file` | 服务端证书（HTTPS） | HTTPS 必须 |
+| `--key-file` | 服务端私钥（HTTPS） | HTTPS 必须 |
+| `--trusted-ca-file` | 客户端 CA 证书（HTTPS） | HTTPS 必须 |
+| `--peer-cert-file` | 节点间通信证书（HTTPS） | HTTPS 必须 |
+| `--peer-key-file` | 节点间通信私钥（HTTPS） | HTTPS 必须 |
+| `--peer-trusted-ca-file` | 节点间 CA 证书（HTTPS） | HTTPS 必须 |
+| `--client-cert-auth` | 要求客户端提供证书 | 可选，Nacos 不带证书时需去掉 |
+| `--peer-client-cert-auth` | 要求节点间通信提供证书 | HTTPS 建议开启 |
+
+### yml 配置字段对照表
+
+| yml 字段 | 命令行参数 | 说明 |
+|----------|-----------|------|
+| `name` | `--name` | 节点名称 |
+| `data-dir` | `--data-dir` | 数据目录 |
+| `listen-client-urls` | `--listen-client-urls` | 客户端监听地址 |
+| `listen-peer-urls` | `--listen-peer-urls` | 节点间监听地址 |
+| `advertise-client-urls` | `--advertise-client-urls` | 客户端广播地址 |
+| `initial-advertise-peer-urls` | `--initial-advertise-peer-urls` | 节点间广播地址 |
+| `initial-cluster` | `--initial-cluster` | 集群成员列表 |
+| `initial-cluster-state` | `--initial-cluster-state` | new 或 existing |
+| `initial-cluster-token` | `--initial-cluster-token` | 集群标识 |
+| `client-transport-security.cert-file` | `--cert-file` | 客户端证书 |
+| `client-transport-security.key-file` | `--key-file` | 客户端私钥 |
+| `client-transport-security.client-cert-auth` | `--client-cert-auth` | 客户端证书认证 |
+| `client-transport-security.trusted-ca-file` | `--trusted-ca-file` | 客户端 CA |
+| `peer-transport-security.cert-file` | `--peer-cert-file` | peer 证书 |
+| `peer-transport-security.key-file` | `--peer-key-file` | peer 私钥 |
+| `peer-transport-security.client-cert-auth` | `--peer-client-cert-auth` | peer 证书认证 |
+| `peer-transport-security.trusted-ca-file` | `--peer-trusted-ca-file` | peer CA |
